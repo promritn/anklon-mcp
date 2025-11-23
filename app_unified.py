@@ -343,4 +343,30 @@ def health():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+
+    # Check if SSL certificates exist for HTTPS
+    # Try Docker path first, then local path
+    if os.path.exists('/app/certs/cert.pem'):
+        cert_path = '/app/certs/cert.pem'
+        key_path = '/app/certs/key.pem'
+    else:
+        cert_path = './certs/cert.pem'
+        key_path = './certs/key.pem'
+
+    if os.path.exists(cert_path) and os.path.exists(key_path):
+        # Run with HTTPS using self-signed certificate
+        import ssl
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert_path, key_path)
+
+        print(f"🔒 Starting HTTPS server on port {port}")
+        print(f"   Certificate: {cert_path}")
+        print(f"   Key: {key_path}")
+
+        app.run(host='0.0.0.0', port=port, debug=False, ssl_context=context)
+    else:
+        # Fall back to HTTP
+        print(f"⚠️  SSL certificates not found, running HTTP on port {port}")
+        print(f"   To enable HTTPS, run: bash /app/generate_cert.sh")
+
+        app.run(host='0.0.0.0', port=port, debug=False)
