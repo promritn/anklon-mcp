@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Thai Phonetic WebSocket Test</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 900px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .server-info {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .test-section h2 {
+            margin-top: 0;
+            color: #1976d2;
+        }
+        input[type="text"] {
+            width: 70%;
+            padding: 10px;
+            font-size: 16px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            background: #1976d2;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+        button:hover {
+            background: #1565c0;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .status.connected {
+            background: #c8e6c9;
+            color: #2e7d32;
+        }
+        .status.disconnected {
+            background: #ffcdd2;
+            color: #c62828;
+        }
+        .result {
+            background: #f5f5f5;
+            padding: 15px;
+            margin-top: 10px;
+            border-radius: 5px;
+            white-space: pre-wrap;
+            font-family: 'Courier New', monospace;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .log {
+            background: #263238;
+            color: #aed581;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+        .log-entry {
+            margin: 2px 0;
+        }
+        .log-entry.error {
+            color: #ff5252;
+        }
+        .log-entry.success {
+            color: #69f0ae;
+        }
+        .log-entry.info {
+            color: #81d4fa;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🇹🇭 Thai Phonetic WebSocket Tester</h1>
+
+        <div class="server-info">
+            <strong>Server:</strong> <span id="serverUrl">https://170.64.173.219:2083</span><br>
+            <strong>Status:</strong> <span id="connectionStatus" class="status disconnected">Disconnected</span>
+        </div>
+
+        <!-- Connection Control -->
+        <div class="test-section">
+            <h2>Connection</h2>
+            <button onclick="connectToServer()" id="connectBtn">Connect</button>
+            <button onclick="disconnectFromServer()" id="disconnectBtn" disabled>Disconnect</button>
+        </div>
+
+        <!-- Standard WebSocket Test -->
+        <div class="test-section">
+            <h2>Standard WebSocket API</h2>
+            <input type="text" id="thaiText" placeholder="พิมพ์ข้อความภาษาไทย..." value="สวัสดีครับ">
+            <button onclick="testGetPhonemes()" id="testPhonemeBtn" disabled>Get Phonemes</button>
+            <button onclick="testSegment()" id="testSegmentBtn" disabled>Segment Text</button>
+            <button onclick="testAnalysis()" id="testAnalysisBtn" disabled>Analyze</button>
+            <div id="standardResult" class="result"></div>
+        </div>
+
+        <!-- MCP Protocol Test -->
+        <div class="test-section">
+            <h2>MCP Protocol (JSON-RPC)</h2>
+            <button onclick="mcpInitialize()" id="mcpInitBtn" disabled>Initialize</button>
+            <button onclick="mcpToolsList()" id="mcpListBtn" disabled>Tools List</button>
+            <button onclick="mcpToolsCall()" id="mcpCallBtn" disabled>Tools Call</button>
+            <div id="mcpResult" class="result"></div>
+        </div>
+
+        <!-- Connection Log -->
+        <div id="connectionLog" class="log">
+            <div class="log-entry info">Waiting for connection...</div>
+        </div>
+    </div>
+
+    <script>
+        let socket = null;
+        let mcpRequestId = 0;
+        const SERVER_URL = 'https://170.64.173.219:2083';
+
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('connectionLog');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            const timestamp = new Date().toLocaleTimeString();
+            entry.textContent = `[${timestamp}] ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function updateConnectionStatus(connected) {
+            const status = document.getElementById('connectionStatus');
+            const buttons = document.querySelectorAll('button:not(#connectBtn):not(#disconnectBtn)');
+
+            if (connected) {
+                status.className = 'status connected';
+                status.textContent = 'Connected';
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('disconnectBtn').disabled = false;
+                buttons.forEach(btn => btn.disabled = false);
+            } else {
+                status.className = 'status disconnected';
+                status.textContent = 'Disconnected';
+                document.getElementById('connectBtn').disabled = false;
+                document.getElementById('disconnectBtn').disabled = true;
+                buttons.forEach(btn => btn.disabled = true);
+            }
+        }
+
+        function connectToServer() {
+            log('Connecting to ' + SERVER_URL + '...', 'info');
+
+            socket = io(SERVER_URL, {
+                rejectUnauthorized: false,
+                transports: ['websocket', 'polling']
+            });
+
+            socket.on('connect', () => {
+                log('Connected successfully!', 'success');
+                updateConnectionStatus(true);
+            });
+
+            socket.on('disconnect', () => {
+                log('Disconnected from server', 'error');
+                updateConnectionStatus(false);
+            });
+
+            socket.on('connection_response', (data) => {
+                log('Server: ' + data.message, 'success');
+            });
+
+            // Standard events
+            socket.on('phonemes_response', (data) => {
+                document.getElementById('standardResult').textContent =
+                    JSON.stringify(data, null, 2);
+                log('Received phonemes response', 'success');
+            });
+
+            socket.on('segment_response', (data) => {
+                document.getElementById('standardResult').textContent =
+                    JSON.stringify(data, null, 2);
+                log('Received segment response', 'success');
+            });
+
+            socket.on('analysis_response', (data) => {
+                document.getElementById('standardResult').textContent =
+                    JSON.stringify(data, null, 2);
+                log('Received analysis response', 'success');
+            });
+
+            // MCP Protocol events
+            socket.on('mcp_response', (data) => {
+                document.getElementById('mcpResult').textContent =
+                    JSON.stringify(data, null, 2);
+                log('Received MCP response (ID: ' + data.id + ')', 'success');
+            });
+
+            socket.on('connect_error', (error) => {
+                log('Connection error: ' + error.message, 'error');
+            });
+        }
+
+        function disconnectFromServer() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+                updateConnectionStatus(false);
+            }
+        }
+
+        // Standard WebSocket Tests
+        function testGetPhonemes() {
+            const text = document.getElementById('thaiText').value;
+            log('Sending get_phonemes: ' + text, 'info');
+            socket.emit('get_phonemes', { text: text });
+        }
+
+        function testSegment() {
+            const text = document.getElementById('thaiText').value;
+            log('Sending segment_text: ' + text, 'info');
+            socket.emit('segment_text', { text: text });
+        }
+
+        function testAnalysis() {
+            const text = document.getElementById('thaiText').value;
+            log('Sending analyze_pronunciation: ' + text, 'info');
+            socket.emit('analyze_pronunciation', { text: text });
+        }
+
+        // MCP Protocol Tests
+        function mcpInitialize() {
+            mcpRequestId++;
+            const request = {
+                jsonrpc: "2.0",
+                method: "initialize",
+                params: {},
+                id: mcpRequestId
+            };
+            log('MCP Request: initialize (ID: ' + mcpRequestId + ')', 'info');
+            socket.emit('mcp_request', request);
+        }
+
+        function mcpToolsList() {
+            mcpRequestId++;
+            const request = {
+                jsonrpc: "2.0",
+                method: "tools/list",
+                params: {},
+                id: mcpRequestId
+            };
+            log('MCP Request: tools/list (ID: ' + mcpRequestId + ')', 'info');
+            socket.emit('mcp_request', request);
+        }
+
+        function mcpToolsCall() {
+            const text = document.getElementById('thaiText').value;
+            mcpRequestId++;
+            const request = {
+                jsonrpc: "2.0",
+                method: "tools/call",
+                params: {
+                    name: "get_thai_phonemes",
+                    arguments: { text: text }
+                },
+                id: mcpRequestId
+            };
+            log('MCP Request: tools/call - get_thai_phonemes (ID: ' + mcpRequestId + ')', 'info');
+            socket.emit('mcp_request', request);
+        }
+
+        // Auto-connect on page load (optional)
+        // window.onload = connectToServer;
+    </script>
+</body>
+</html>
