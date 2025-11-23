@@ -1,13 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Unified Flask API with MCP Support
-Combines the original Flask API with MCP SSE endpoints
+Unified Flask API with MCP Support and WebSocket
+Combines the original Flask API with MCP SSE endpoints and WebSocket
 """
 
 import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit
 import json
 import urllib.parse
 
@@ -25,6 +26,9 @@ spec.loader.exec_module(original_app)
 # Create new Flask app
 app = Flask(__name__)
 CORS(app)  # Enable CORS for MCP SSE
+
+# Initialize SocketIO with CORS support
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 # ==========================================
 # Original Flask API Routes
@@ -320,6 +324,297 @@ def format_analysis_output(api_response: dict) -> dict:
 
 
 # ==========================================
+# WebSocket Events
+# ==========================================
+
+@socketio.on('connect')
+def handle_connect():
+    """Handle WebSocket connection"""
+    print('Client connected')
+    emit('connection_response', {
+        'status': 'connected',
+        'message': 'Successfully connected to Thai Phonetic WebSocket',
+        'service': 'thai-phonetic-unified'
+    })
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle WebSocket disconnection"""
+    print('Client disconnected')
+
+
+@socketio.on('get_phonemes')
+def handle_get_phonemes(data):
+    """
+    Handle phoneme request via WebSocket
+    Expected data: {'text': 'Thai text here'}
+    """
+    try:
+        text = data.get('text', '')
+        if not text:
+            emit('phonemes_response', {
+                'error': 'No text provided',
+                'status': 'error'
+            })
+            return
+
+        # Call original API
+        response = original_app.getData(text)
+        api_result = json.loads(response.get_data(as_text=True))
+
+        # Format response
+        formatted_result = format_phonetic_output(api_result)
+
+        emit('phonemes_response', {
+            'status': 'success',
+            'data': formatted_result,
+            'original_text': text
+        })
+
+    except Exception as e:
+        emit('phonemes_response', {
+            'error': str(e),
+            'status': 'error'
+        })
+
+
+@socketio.on('segment_text')
+def handle_segment_text(data):
+    """
+    Handle text segmentation via WebSocket
+    Expected data: {'text': 'Thai text here'}
+    """
+    try:
+        text = data.get('text', '')
+        if not text:
+            emit('segment_response', {
+                'error': 'No text provided',
+                'status': 'error'
+            })
+            return
+
+        # Call original API
+        response = original_app.getData(text)
+        api_result = json.loads(response.get_data(as_text=True))
+
+        # Format response
+        formatted_result = format_segmentation_output(api_result)
+
+        emit('segment_response', {
+            'status': 'success',
+            'data': formatted_result,
+            'original_text': text
+        })
+
+    except Exception as e:
+        emit('segment_response', {
+            'error': str(e),
+            'status': 'error'
+        })
+
+
+@socketio.on('analyze_pronunciation')
+def handle_analyze_pronunciation(data):
+    """
+    Handle pronunciation analysis via WebSocket
+    Expected data: {'text': 'Thai text here'}
+    """
+    try:
+        text = data.get('text', '')
+        if not text:
+            emit('analysis_response', {
+                'error': 'No text provided',
+                'status': 'error'
+            })
+            return
+
+        # Call original API
+        response = original_app.getData(text)
+        api_result = json.loads(response.get_data(as_text=True))
+
+        # Format response
+        formatted_result = format_analysis_output(api_result)
+
+        emit('analysis_response', {
+            'status': 'success',
+            'data': formatted_result,
+            'original_text': text
+        })
+
+    except Exception as e:
+        emit('analysis_response', {
+            'error': str(e),
+            'status': 'error'
+        })
+
+
+@socketio.on('ping')
+def handle_ping():
+    """Handle ping/pong for connection testing"""
+    emit('pong', {'timestamp': os.times()[4]})
+
+
+# ==========================================
+# MCP Protocol via WebSocket
+# ==========================================
+
+@socketio.on('mcp_request')
+def handle_mcp_request(data):
+    """
+    Handle MCP JSON-RPC requests via WebSocket
+    This follows the official MCP protocol specification
+
+    Expected data format:
+    {
+        "jsonrpc": "2.0",
+        "method": "method_name",
+        "params": {...},
+        "id": request_id
+    }
+    """
+    try:
+        method = data.get('method')
+        params = data.get('params', {})
+        request_id = data.get('id')
+
+        # Handle different MCP methods
+        if method == 'initialize':
+            response = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {
+                        "tools": {}
+                    },
+                    "serverInfo": {
+                        "name": "thai-phonetic-unified",
+                        "version": "1.0.0"
+                    }
+                }
+            }
+            emit('mcp_response', response)
+
+        elif method == 'tools/list':
+            response = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "tools": [
+                        {
+                            "name": "get_thai_phonemes",
+                            "description": "Get phonetic transcription (phonemes) of Thai text. Returns phonemes, syllables (payang), and word segmentation. Works with single words or full sentences.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "text": {
+                                        "type": "string",
+                                        "description": "Thai text to transcribe (can be a word or sentence)"
+                                    }
+                                },
+                                "required": ["text"]
+                            }
+                        },
+                        {
+                            "name": "segment_thai_text",
+                            "description": "Segment Thai text into words with detailed phonetic information for each word. Returns word boundaries, phonemes, and syllables for each word.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "text": {
+                                        "type": "string",
+                                        "description": "Thai text to segment (typically a sentence or phrase)"
+                                    }
+                                },
+                                "required": ["text"]
+                            }
+                        },
+                        {
+                            "name": "analyze_thai_pronunciation",
+                            "description": "Detailed pronunciation analysis of Thai text. Returns syllable-by-syllable breakdown with tone marks, final consonants, and vowel length information.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "text": {
+                                        "type": "string",
+                                        "description": "Thai text to analyze in detail"
+                                    }
+                                },
+                                "required": ["text"]
+                            }
+                        }
+                    ]
+                }
+            }
+            emit('mcp_response', response)
+
+        elif method == 'tools/call':
+            tool_name = params.get('name')
+            arguments = params.get('arguments', {})
+            text = arguments.get('text', '')
+
+            # Call original API
+            api_response = original_app.getData(text)
+            api_result = json.loads(api_response.get_data(as_text=True))
+
+            # Format based on tool
+            if tool_name == 'get_thai_phonemes':
+                formatted_result = format_phonetic_output(api_result)
+            elif tool_name == 'segment_thai_text':
+                formatted_result = format_segmentation_output(api_result)
+            elif tool_name == 'analyze_thai_pronunciation':
+                formatted_result = format_analysis_output(api_result)
+            else:
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {
+                        "code": -32601,
+                        "message": f"Unknown tool: {tool_name}"
+                    }
+                }
+                emit('mcp_response', response)
+                return
+
+            response = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(formatted_result, ensure_ascii=False, indent=2)
+                        }
+                    ]
+                }
+            }
+            emit('mcp_response', response)
+
+        else:
+            response = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {
+                    "code": -32601,
+                    "message": f"Method not found: {method}"
+                }
+            }
+            emit('mcp_response', response)
+
+    except Exception as e:
+        response = {
+            "jsonrpc": "2.0",
+            "id": data.get('id'),
+            "error": {
+                "code": -32603,
+                "message": f"Internal error: {str(e)}"
+            }
+        }
+        emit('mcp_response', response)
+
+
+# ==========================================
 # Health Check & Info
 # ==========================================
 
@@ -332,7 +627,22 @@ def health():
         "endpoints": {
             "original_api": "GET /<word>",
             "mcp_sse": "POST /mcp/sse",
+            "websocket": "ws://host:port/socket.io/",
             "health": "GET /health"
+        },
+        "websocket_events": {
+            "standard": {
+                "connect": "Auto on connection",
+                "get_phonemes": "Get phonetic transcription",
+                "segment_text": "Segment Thai text into words",
+                "analyze_pronunciation": "Detailed pronunciation analysis",
+                "ping": "Connection test"
+            },
+            "mcp_protocol": {
+                "mcp_request": "MCP JSON-RPC request (follows MCP specification)",
+                "mcp_response": "MCP JSON-RPC response",
+                "supported_methods": ["initialize", "tools/list", "tools/call"]
+            }
         }
     })
 
@@ -355,18 +665,19 @@ if __name__ == '__main__':
 
     if os.path.exists(cert_path) and os.path.exists(key_path):
         # Run with HTTPS using self-signed certificate
-        import ssl
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(cert_path, key_path)
-
-        print(f"🔒 Starting HTTPS server on port {port}")
+        print(f"🔒 Starting HTTPS server with WebSocket on port {port}")
         print(f"   Certificate: {cert_path}")
         print(f"   Key: {key_path}")
+        print(f"   WebSocket: wss://0.0.0.0:{port}/socket.io/")
 
-        app.run(host='0.0.0.0', port=port, debug=False, ssl_context=context)
+        socketio.run(app, host='0.0.0.0', port=port, debug=False,
+                    certfile=cert_path, keyfile=key_path,
+                    allow_unsafe_werkzeug=True)
     else:
         # Fall back to HTTP
-        print(f"⚠️  SSL certificates not found, running HTTP on port {port}")
+        print(f"⚠️  SSL certificates not found, running HTTP with WebSocket on port {port}")
         print(f"   To enable HTTPS, run: bash /app/generate_cert.sh")
+        print(f"   WebSocket: ws://0.0.0.0:{port}/socket.io/")
 
-        app.run(host='0.0.0.0', port=port, debug=False)
+        socketio.run(app, host='0.0.0.0', port=port, debug=False,
+                    allow_unsafe_werkzeug=True)
