@@ -1,0 +1,6 @@
+# Unified Flask API with MCP Support
+Flask>=2.2.3
+flask-cors>=4.0.0
+pythainlp>=3.1.1
+requests>=2.19.1
+mimerender>=0.6.0
